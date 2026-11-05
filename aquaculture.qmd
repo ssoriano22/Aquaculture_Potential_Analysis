@@ -91,25 +91,26 @@ cat("Extent:    "); print(ext(bath))
 ```
 
 ```{r}
-# Confirm same CRS before proceeding
-cat("Check CRS Match:\n")
-cat("West Coast EEZ vs bathymetry: ", same.crs(eez, bath), "\n")
-cat("SST Stack vs West Coast EEZ: ", same.crs(sst_stack, eez), "\n")
-
-# All CRS match, but EPSG code is missing from sst_stack.
-# Assign ESPG:4326 code to sst_stack
-crs(sst_stack) <- "EPSG:4326"
-```
-
-```{r}
 # Warning - CRS - confirm all three crs match, otherwise stop
-if (same.crs(eez,bath) | same.crs(sst_stack, eez)){
+if (same.crs(eez,bath) & same.crs(sst_stack, eez)){
     # All three CRS match - true
     print("SST Stack, West Coast EEZ, and Bathymetry data CRS all match!")
 } else {
     # CRS match - false
     stop("CRS do NOT match!")
 }
+```
+
+
+```{r}
+# # Confirm same CRS before proceeding
+# cat("Check CRS Match:\n")
+# cat("West Coast EEZ vs bathymetry: ", same.crs(eez, bath), "\n")
+# cat("SST Stack vs West Coast EEZ: ", same.crs(sst_stack, eez), "\n")
+
+# All CRS match, but EPSG code is missing from sst_stack.
+# Assign ESPG:4326 code to sst_stack
+crs(sst_stack) <- "EPSG:4326"
 ```
 
 # Process data
@@ -313,14 +314,6 @@ eez_priority <- eez_priority |>
 ```
 
 ```{r}
-#| tbl-cap: "Total suitable area (km^2) for oyster marine aquaculture in each US West Coast Exclusive Economic Zone (EEZ). Suitable area for oyster aquaculture is defined by areas meeting both the temperature requirement of 11-30 degree C, and the depth requirement of 0 to 70 m."
-
-# Make table using kable
-knitr::kable(eez_priority,
-            col.names = c("EEZ Region","Total Suitable Habitat (km^2)"))
-```
-
-```{r}
 #| warning: false
 #| fig-width: 10
 #| fig-height: 7
@@ -328,7 +321,7 @@ knitr::kable(eez_priority,
 # GENERATE FIGURE
 
 # Set color palette
-color_palette <- "brewer.blues"
+color_palette <- c("gray85", "#0077b6")
 
 # Add back EEZ geometries for plotting
 eez_mapv <- eez |> 
@@ -336,11 +329,18 @@ eez_mapv <- eez |>
 
 
 # Create EEZ region map colored by amount of suitable area
+
+tm_basemap(server = "Esri.WorldTopoMap") +
 tm_shape(eez_mapv) +
   tm_polygons(fill = "Suitable_Habitat_km2",
+              fill_alpha = 0.6,
+              col = "#36454F",
               fill.scale = tm_scale_continuous(values = color_palette),
               fill.legend = tm_legend(title = "Suitable Area (km^2)",
                                       position = tm_pos_out("right"))) +
+  tm_text(text = "rgn_key",
+          size = 0.8,
+          col = "#36454F") +
 tm_compass(position = c("left","bottom")) +
 tm_scalebar(position = c("left","bottom")) +
 tm_options(component.autoscale = FALSE) +
@@ -359,6 +359,16 @@ tm_layout(# Specify legend title size
 
 ```
 Figure 1: Map of the US West Coast Exclusive Economic Zones (EEZ), colored by amount of suitable area (km^2) for oyster marine aquaculture. Suitable area for oyster aquaculture is defined by areas meeting both the temperature requirement of 11-30 degree C, and the depth requirement of 0 to 70 m.
+
+```{r}
+#| tbl-cap: "Total suitable area (km^2) for oyster marine aquaculture in each US West Coast Exclusive Economic Zone (EEZ). Suitable area for oyster aquaculture is defined by areas meeting both the temperature requirement of 11-30 degree C, and the depth requirement of 0 to 70 m."
+
+# Make table using kable
+eez_mapv |> 
+    select(rgn, rgn_key, Suitable_Habitat_km2) |> 
+    st_drop_geometry() |> 
+    knitr::kable(col.names = c("EEZ Region", "Region Key", "Total Suitable Habitat (km^2)"))
+```
 
 # Data
 
