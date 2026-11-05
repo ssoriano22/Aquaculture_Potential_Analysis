@@ -119,7 +119,7 @@ Next, we need to process the SST and depth data so that they can be combined. In
 ```{r}
 # Create raster with 1-layer of mean SST degC from 5-layer raster
 sst_mean <- app(sst_stack, fun = "mean", na.rm = TRUE)
-names(sst_mean) <- "Mean_SST_K"
+names(sst_mean) <- "Mean_SST"
 
 # Check input and output raster layers to confirm
 cat("Original SST stacked raster has:",nlyr(sst_stack),"layers","\n")
@@ -199,6 +199,9 @@ To find suitable locations for marine aquaculture, we’ll need to find location
         - sea surface temperature: 11-30°C
         - depth: 0-70 meters below sea level
         - hint: set suitable values to 1 and unsuitable values to 0
+    - find locations that satisfy both SST and depth conditions
+    Tip: finding suitable locations
+        The SST and depth rasters should now identify the suitability of locations as 0 or 1. To find locations that have both suitable temperature and depth, you can use map algebra. One idea is to multiply the values of the cells, using the lapp() function.
 
 ```{r}
 # Set matrix for classify categories - tempC
@@ -206,25 +209,36 @@ rcl_matrix_tempC <- matrix(c(
    11,  30,  1
 ), ncol = 3, byrow = TRUE)
 
-# Set matrix for classify categories - depthm
-rcl_matrix_depthm <- matrix(c(
-   11,  30,  1
-), ncol = 3, byrow = TRUE)
+# Reclassify tempC layer and turn resulting categories into factors 
+oyster_tempC_zones <- as.factor(classify(ocean_raster[[1]], rcl = rcl_matrix_tempC, others = 0))
 
-# Turn into factors
-oyster_zones <- as.factor(classify(ocean_raster, rcl = rcl_matrix))
-
-# Create df w/ levels
-levels(oyster_zones) <- data.frame(
+# Define level names
+levels(oyster_tempC_zones) <- data.frame(
   value = 0:1,
   label = c("Unsuitable", "Suitable")
 )
+
+# Set matrix for classify categories - depthm
+rcl_matrix_depthm <- matrix(c(
+   -70,  0,  1
+), ncol = 3, byrow = TRUE)
+
+# Reclassify depthm layer and turn resulting categories into factors 
+oyster_depthm_zones <- as.factor(classify(ocean_raster[[2]], rcl = rcl_matrix_depthm, others = 0))
+
+# Define level names
+levels(oyster_depthm_zones) <- data.frame(
+  value = 0:1,
+  label = c("Unsuitable", "Suitable")
+)
+
+# Multiply layers to classify by both tempC and depthm
+# Note: Only 1*1 cells will stay 1
+habitat_class <- oyster_tempC_zones * oyster_depthm_zones
+
+# Rename label
+names(habitat_class) <- "Suitable_Habitat"
 ```
-
-    - find locations that satisfy both SST and depth conditions
-
-    TipTip: finding suitable locations
-        The SST and depth rasters should now identify the suitability of locations as 0 or 1. To find locations that have both suitable temperature and depth, you can use map algebra. One idea is to multiply the values of the cells, using the lapp() function.
 
 # Determine the most suitable EEZ
 
@@ -234,6 +248,19 @@ We want to determine the total suitable area within each EEZ in order to rank zo
     - find area of grid cells
     - find the total suitable area within each EEZ
         - hint: it might be helpful to rasterize the EEZ data
+
+```{r}
+# Turn eez vector data into raster
+eez_raster <- rasterize(eez, habitat_class, field = "rgn")
+# Confirm rasterization makes sense
+# plot(eez_raster)
+```
+
+```{r}
+# Grid cell area needs to be determined since crs is EPSG:4326
+# Note: m^2 is default unit
+habclass_cellarea <- cellSize(habitat_class)
+```
 
 # Data
 
