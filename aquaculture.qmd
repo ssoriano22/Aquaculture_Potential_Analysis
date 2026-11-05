@@ -45,8 +45,7 @@ library(here)
 library(sf)
 library(tmap)
 library(terra)
-#library(spData)
-#library(knitr)
+library(knitr)
 #library(ggpubr)
 
 # Set warnings to display as they occur
@@ -54,25 +53,28 @@ options(warn = 1)
 
 # Set ggplot theme
 set_theme(theme_bw())
+
+# Set here path
+here::set_here("/Users/smsoriano/Documents/Documents - Nawiliwili/UCSB_MEDS/eds223/Aquaculture_Potential_Analysis")
 ```
 
 ```{r}
 # LOAD DATA
 
 # Load west coast EEZ vector file
-eez <- sf::st_read(here("Aquaculture_Potential_Analysis/","data","wc_regions_clean.shp")) #|> 
+eez <- sf::st_read(here("data","wc_regions_clean.shp")) #|> 
         # Correct invalid geometries to avoid error in st_join when using CRS 4326
         #st_make_valid()
 
 # Load bathymetry raster
-bath <- rast(here("Aquaculture_Potential_Analysis/","data","depth.tif"))
+bath <- rast(here("data","depth.tif"))
 
 # Load sea surface temp (sst) rasters
-sst_08 <- rast(here("Aquaculture_Potential_Analysis/","data","average_annual_sst_2008.tif"))
-sst_09 <- rast(here("Aquaculture_Potential_Analysis/","data","average_annual_sst_2009.tif"))
-sst_10 <- rast(here("Aquaculture_Potential_Analysis/","data","average_annual_sst_2010.tif"))
-sst_11 <- rast(here("Aquaculture_Potential_Analysis/","data","average_annual_sst_2011.tif"))
-sst_12 <- rast(here("Aquaculture_Potential_Analysis/","data","average_annual_sst_2012.tif"))
+sst_08 <- rast(here("data","average_annual_sst_2008.tif"))
+sst_09 <- rast(here("data","average_annual_sst_2009.tif"))
+sst_10 <- rast(here("data","average_annual_sst_2010.tif"))
+sst_11 <- rast(here("data","average_annual_sst_2011.tif"))
+sst_12 <- rast(here("data","average_annual_sst_2012.tif"))
 
 # Stack sst rasters
 sst_stack <- c(sst_08,sst_09,sst_10,sst_11,sst_12)
@@ -167,14 +169,18 @@ if (same.crs(bath_resampled,sst_mean_C)){
     # CRS match - true
     print("CRS do match!")
     if (all(res(sst_mean_C) == res(bath_resampled))){
+        # Resolution match - true
         print("Resolutions do match!")
         if (ext(sst_mean_C) == ext(bath_resampled)) {
+            # Extent match - true
             print("Extents do match!")
             print("Success - sst_mean_C and bath_resampled match in all required raster characteristics.")
         } else {
+            # Extent match - false
             stop("Extents do NOT match!")
         }
     } else {
+        # Resolution match - false
         stop("Resolutions do NOT match!")
     }
 } else {
@@ -252,15 +258,107 @@ We want to determine the total suitable area within each EEZ in order to rank zo
 ```{r}
 # Turn eez vector data into raster
 eez_raster <- rasterize(eez, habitat_class, field = "rgn")
-# Confirm rasterization makes sense
-# plot(eez_raster)
+
+# Confirm rasterization of eez matches habitat_class raster
+# Warning - confirm eez_raster and SST raster match before proceeding
+# Note: compare crs, resolution, and extent
+print("Checking that habitat_class and eez_raster rasters match in CRS, resolution, and extent...")
+if (same.crs(habitat_class,eez_raster)){
+    # CRS match - true
+    print("CRS do match!")
+    if (all(res(habitat_class) == res(eez_raster))){
+        # Resolution match - true
+        print("Resolutions do match!")
+        if (ext(habitat_class) == ext(eez_raster)) {
+            # Extent match - true
+            print("Extents do match!")
+            print("Success - habitat_class and eez_raster match in all required raster characteristics.")
+        } else {
+            # Extent match - false
+            stop("Extents do NOT match!")
+        }
+    } else {
+        # Resolution match - false
+        stop("Resolutions do NOT match!")
+    }
+} else {
+    # CRS match - false
+    stop("CRS do NOT match!")
+}
 ```
 
 ```{r}
-# Grid cell area needs to be determined since crs is EPSG:4326
+# Grid cell area needs to be determined since crs is EPSG:4326 (units = deg)
 # Note: m^2 is default unit
-habclass_cellarea <- cellSize(habitat_class)
+habclass_cellarea <- cellSize(habitat_class, unit = "km")
+
+# Multiply each cell in habitat_class by the cellSize areas
+# Note: Because unsuitable = 0, unsuitable cells area will = 0
+# Note: Only suitable cells (1) will keep the size value (m^2)
+habitat_class_area <- habitat_class * habclass_cellarea
+
+# Rename to add units
+names(habitat_class_area) <- "Suitable_Habitat_km2"
 ```
+
+```{r}
+# Calculate sum of suitable area in each EEZ using zonal operation
+# habitat_class_area = raster where every suitable pixel represents size in m^2
+# eez_raster = raster version of EEZ vector (EEZ regions)
+eez_priority <- zonal(habitat_class_area, eez_raster, fun = "sum", na.rm = TRUE)
+
+# Sort eez regions by descending area
+eez_priority <- eez_priority |> 
+    arrange(desc(Suitable_Habitat_km2))
+```
+
+```{r}
+#| tbl-cap: "Total suitable area (km^2) for oyster marine aquaculture in each US West Coast Exclusive Economic Zone (EEZ). Suitable area for oyster aquaculture is defined by areas meeting both the temperature requirement of 11-30 degree C, and the depth requirement of 0 to 70 m."
+
+# Make table using kable
+knitr::kable(eez_priority,
+            col.names = c("EEZ Region","Total Suitable Habitat (km^2)"))
+```
+
+```{r}
+#| warning: false
+#| fig-width: 10
+#| fig-height: 7
+
+# GENERATE FIGURE
+
+# Set color palette
+color_palette <- "brewer.blues"
+
+# Add back EEZ geometries for plotting
+eez_mapv <- eez |> 
+    left_join(eez_priority, by = "rgn")
+
+
+# Create EEZ region map colored by amount of suitable area
+tm_shape(eez_mapv) +
+  tm_polygons(fill = "Suitable_Habitat_km2",
+              fill.scale = tm_scale_continuous(values = color_palette),
+              fill.legend = tm_legend(title = "Suitable Area (km^2)",
+                                      position = tm_pos_out("right"))) +
+tm_compass(position = c("left","bottom")) +
+tm_scalebar(position = c("left","bottom")) +
+tm_options(component.autoscale = FALSE) +
+tm_title("EEZ Regions with the Most Suitable Area for Oyster Aquaculture",
+            size = 1.5,
+            frame = TRUE) +
+tm_layout(# Specify legend title size
+          legend.title.size = 1.0,
+          # Specify legend text size
+          legend.text.size = 0.8,
+          # Set font family
+          text.fontfamily = "sans",
+          # Set inner margins to give scalebar room
+          inner.margins = c(0.1,0.1,0.05,0.05)
+          )
+
+```
+Figure 1: Map of the US West Coast Exclusive Economic Zones (EEZ), colored by amount of suitable area (km^2) for oyster marine aquaculture. Suitable area for oyster aquaculture is defined by areas meeting both the temperature requirement of 11-30 degree C, and the depth requirement of 0 to 70 m.
 
 # Data
 
