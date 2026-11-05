@@ -6,3 +6,243 @@ date: today
 format: pdf
 ---
 
+# Background - DELETE THIS
+
+For this assignment, you are tasked with determining which Exclusive Economic Zones (EEZ) on the West Coast of the US are best suited to developing marine aquaculture for several species of oysters and a species of your choice. Suitable locations will be determined based on range of suitable sea surface temperature (SST) and depth values for the species.
+
+To make your workflow generalizable, you must create a function that has the following characteristics:
+
+    arguments:
+        minimum and maximum sea surface temperature
+        minimum and maximum depth
+        species name
+    outputs:
+        map of EEZ regions colored by amount of suitable area
+        species name should be included in the map’s title
+
+Tip: Building a generalizable workflow
+
+    Remember, functions can be hard to debug! So it’s highly recommended that you build the workflow for a single species (not in a function). Then you can start translating your workflow into a function by identifying the pieces that need to be generalized.
+
+    Questions to ask yourself: which variables can stay the same for each species and which ones would need to change?
+
+# Prepare data
+
+To start, we need to load all necessary data and make sure it has the coordinate reference system.
+
+    - shapefile for the West Coast EEZ
+    - bathymetry raster
+    - SST rasters
+        - combine SST rasters into a raster stack
+
+    Tip
+    Make sure to check that these datasets have the same coordinate reference systems! If not, transform them to match.
+
+```{r}
+# Load packages
+library(tidyverse)
+library(here)
+library(sf)
+library(tmap)
+library(terra)
+#library(spData)
+#library(knitr)
+#library(ggpubr)
+
+# Set warnings to display as they occur
+options(warn = 1)
+
+# Set ggplot theme
+set_theme(theme_bw())
+```
+
+```{r}
+# LOAD DATA
+
+# Load west coast EEZ vector file
+eez <- sf::st_read(here("Aquaculture_Potential_Analysis/","data","wc_regions_clean.shp")) #|> 
+        # Correct invalid geometries to avoid error in st_join when using CRS 4326
+        #st_make_valid()
+
+# Load bathymetry raster
+bath <- rast(here("Aquaculture_Potential_Analysis/","data","depth.tif"))
+
+# Load sea surface temp (sst) rasters
+sst_08 <- rast(here("Aquaculture_Potential_Analysis/","data","average_annual_sst_2008.tif"))
+sst_09 <- rast(here("Aquaculture_Potential_Analysis/","data","average_annual_sst_2009.tif"))
+sst_10 <- rast(here("Aquaculture_Potential_Analysis/","data","average_annual_sst_2010.tif"))
+sst_11 <- rast(here("Aquaculture_Potential_Analysis/","data","average_annual_sst_2011.tif"))
+sst_12 <- rast(here("Aquaculture_Potential_Analysis/","data","average_annual_sst_2012.tif"))
+
+# Stack sst rasters
+sst_stack <- c(sst_08,sst_09,sst_10,sst_11,sst_12)
+
+# Check resolution and extent of sst_stack
+cat("=== Sea Surface Temp Stack (K) ===\n")
+cat("Resolution:", res(sst_stack), "\n")
+cat("Extent:    "); print(ext(sst_stack))
+
+# Check resolution and extent of bath
+cat("=== Bathymetry (m) ===\n")
+cat("Resolution:", res(bath), "\n")
+cat("Extent:    "); print(ext(bath))
+```
+
+```{r}
+# Confirm same CRS before proceeding
+cat("Check CRS Match:\n")
+cat("West Coast EEZ vs bathymetry: ", same.crs(eez, bath), "\n")
+cat("SST Stack vs West Coast EEZ: ", same.crs(sst_stack, eez), "\n")
+
+# All CRS match, but EPSG code is missing from sst_stack.
+# Assign ESPG:4326 code to sst_stack
+crs(sst_stack) <- "EPSG:4326"
+```
+
+```{r}
+# Warning - CRS - confirm all three crs match, otherwise stop
+if (same.crs(eez,bath) | same.crs(sst_stack, eez)){
+    # All three CRS match - true
+    print("SST Stack, West Coast EEZ, and Bathymetry data CRS all match!")
+} else {
+    # CRS match - false
+    stop("CRS do NOT match!")
+}
+```
+
+# Process data
+
+Next, we need to process the SST and depth data so that they can be combined. In this case the SST and depth data have slightly different resolutions, extents, and positions.
+
+    - find the mean SST from 2008-2012 (e.g. create single raster of average SST)
+
+```{r}
+# Create raster with 1-layer of mean SST degC from 5-layer raster
+sst_mean <- app(sst_stack, fun = "mean", na.rm = TRUE)
+names(sst_mean) <- "Mean_SST_K"
+
+# Check input and output raster layers to confirm
+cat("Original SST stacked raster has:",nlyr(sst_stack),"layers","\n")
+cat("New SST Mean raster has:",nlyr(sst_mean),"layer","\n")
+```
+
+    - convert average SST from Kelvin to Celsius
+        - hint: subtract by 273.15
+
+```{r}
+# Check units of SST_mean raster
+minmax(sst_mean)
+
+# Convert SST_mean K to C (local operation - each cell)
+sst_mean_C <- sst_mean - 273.15
+
+# Confirm units of SST_mean_C raster
+minmax(sst_mean_C)
+```
+
+    - crop depth raster to match the extent of the SST raster
+
+```{r}
+# Crop the bath raster to the extent of the sst_mean_C raster
+# Note: CRS must match
+bath_crop <- crop(bath, sst_mean_C)
+```
+
+    - note: the resolutions of the SST and depth data do not match
+        - resample the depth data to match the resolution of the SST data using the bilinear method approach
+
+```{r}
+# Resample bath to match sst_mean_C using bilinear approach
+bath_resampled <- resample(bath_crop, sst_mean_C, method = "bilinear")
+```
+
+    - check that the depth and SST match in resolution, extent, and coordinate reference system
+        - hint: can the rasters be stacked?
+
+```{r}
+# Warning - confirm bathymetry and SST raster match before proceeding
+# Note: compare crs, resolution, and extent
+print("Checking that sst_mean_C and bath_resampled rasters match in CRS, resolution, and extent...")
+if (same.crs(bath_resampled,sst_mean_C)){
+    # CRS match - true
+    print("CRS do match!")
+    if (all(res(sst_mean_C) == res(bath_resampled))){
+        print("Resolutions do match!")
+        if (ext(sst_mean_C) == ext(bath_resampled)) {
+            print("Extents do match!")
+            print("Success - sst_mean_C and bath_resampled match in all required raster characteristics.")
+        } else {
+            stop("Extents do NOT match!")
+        }
+    } else {
+        stop("Resolutions do NOT match!")
+    }
+} else {
+    # CRS match - false
+    stop("CRS do NOT match!")
+}
+```
+
+```{r}
+# Stack sst_mean_C and bath_resampled rasters
+ocean_raster <- c(sst_mean_C,bath_resampled)
+# Confirm stack
+cat("New ocean_raster has",nlyr(ocean_raster),"layers.\n")
+cat("Layers are:",names(ocean_raster)[nlyr(ocean_raster)-1],",",names(ocean_raster)[nlyr(ocean_raster)])
+```
+
+# Find suitable locations
+
+To find suitable locations for marine aquaculture, we’ll need to find locations that are suitable in terms of both SST and depth.
+
+    - reclassify SST and depth data into locations that are suitable for oysters
+        - sea surface temperature: 11-30°C
+        - depth: 0-70 meters below sea level
+        - hint: set suitable values to 1 and unsuitable values to 0
+
+```{r}
+# Set matrix for classify categories - tempC
+rcl_matrix_tempC <- matrix(c(
+   11,  30,  1
+), ncol = 3, byrow = TRUE)
+
+# Set matrix for classify categories - depthm
+rcl_matrix_depthm <- matrix(c(
+   11,  30,  1
+), ncol = 3, byrow = TRUE)
+
+# Turn into factors
+oyster_zones <- as.factor(classify(ocean_raster, rcl = rcl_matrix))
+
+# Create df w/ levels
+levels(oyster_zones) <- data.frame(
+  value = 0:1,
+  label = c("Unsuitable", "Suitable")
+)
+```
+
+    - find locations that satisfy both SST and depth conditions
+
+    TipTip: finding suitable locations
+        The SST and depth rasters should now identify the suitability of locations as 0 or 1. To find locations that have both suitable temperature and depth, you can use map algebra. One idea is to multiply the values of the cells, using the lapp() function.
+
+# Determine the most suitable EEZ
+
+We want to determine the total suitable area within each EEZ in order to rank zones by priority. To do so, we need to find the total area of suitable locations within each EEZ.
+
+    - select suitable cells within West Coast EEZs
+    - find area of grid cells
+    - find the total suitable area within each EEZ
+        - hint: it might be helpful to rasterize the EEZ data
+
+# Data
+
+Flanders Marine Institute (2026): MarineRegions.org. https://www.marineregions.org/eez.php
+
+GEBCO Compilation Group. (2022). GEBCO_2022 Grid [Data set]. British Oceanographic Data Centre, National Oceanography Centre, NERC, UK. https://doi.org/10.5285/e0f0bb80-ab44-2739-e053-6c86abc0289c
+
+NOAA Coral Reef Watch. (2018). Daily global 5km satellite sea surface temperature anomaly (Version 3.1). U.S. Department of Commerce, National Oceanic and Atmospheric Administration. https://coralreefwatch.noaa.gov/product/5km/index_5km_ssta.php
+
+# References
+
+[EDS223](https://eds-223-geospatial.github.io/) - [UCSB MEDS 2027](https://bren.ucsb.edu/masters-programs/master-environmental-data-science)
