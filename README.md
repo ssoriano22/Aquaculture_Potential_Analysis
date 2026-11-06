@@ -27,6 +27,8 @@ The below directory tree maps out the layout of this repository:
 
 ## Data
 
+The species, SST, Bathymetry, and EEZ data used in this analysis was provided by the instructor for this EDS223 class, downloaded in previous years from the links below.
+
 Flanders Marine Institute (2026): MarineRegions.org. [https://www.marineregions.org/eez.php](https://www.marineregions.org/eez.php).
 
 GEBCO Compilation Group. (2022). GEBCO_2022 Grid [Data set]. British Oceanographic Data Centre, National Oceanography Centre, NERC, UK. [https://doi.org/10.5285/e0f0bb80-ab44-2739-e053-6c86abc0289c](https://doi.org/10.5285/e0f0bb80-ab44-2739-e053-6c86abc0289c).
