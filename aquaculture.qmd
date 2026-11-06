@@ -6,29 +6,12 @@ date: today
 format: pdf
 ---
 
-# Background - DELETE THIS
-
-For this assignment, you are tasked with determining which Exclusive Economic Zones (EEZ) on the West Coast of the US are best suited to developing marine aquaculture for several species of oysters and a species of your choice. Suitable locations will be determined based on range of suitable sea surface temperature (SST) and depth values for the species.
-
-To make your workflow generalizable, you must create a function that has the following characteristics:
-
-    arguments:
-        minimum and maximum sea surface temperature
-        minimum and maximum depth
-        species name
-    outputs:
-        map of EEZ regions colored by amount of suitable area
-        species name should be included in the map’s title
-
-Tip: Building a generalizable workflow
-
-    Remember, functions can be hard to debug! So it’s highly recommended that you build the workflow for a single species (not in a function). Then you can start translating your workflow into a function by identifying the pieces that need to be generalized.
-
-    Questions to ask yourself: which variables can stay the same for each species and which ones would need to change?
-
-# Prepare data
+# Setup
 
 ```{r}
+#| messages: false
+#| warnings: false
+
 # Load packages
 library(tidyverse)
 library(here)
@@ -43,18 +26,174 @@ options(warn = 1)
 
 # Set ggplot theme
 set_theme(theme_bw())
-
-# Set here path
-here::set_here("/Users/smsoriano/Documents/Documents - Nawiliwili/UCSB_MEDS/eds223/Aquaculture_Potential_Analysis")
 ```
+
+```{r}
+#' FUNCTION - aquaculture_eez_eval()
+#' 
+#' This function generates a map and table showing the US West Coast Exclusive Economic
+#' Zones (EEZ) colored and ordered, respectively, by the amount of area "suitable" for 
+#' marine aquaculture in each zone (km^2) for a single species. "Suitability" is defined 
+#' by Sea Surface Temperature (SST) (degC) and water depth (m).
+#' 
+#' @param species (Character) Species name
+#' @param min_sst (Numeric) Minimum suitable SST for species (degC)
+#' @param max_sst (Numeric) Maximum suitable SST for species (degC)
+#' @param min_depth (Numeric) Minimum suitable depth for species (m). Should be <=0.
+#' @param max_depth (Numeric) Maximum suitable depth for species (m). Should be <=0.
+#' @return A results list with a tmap map object and priority summary table
+#' @examples
+#' aquaculture_eez_eval("Oysters", 11, 30, -70, 0)
+
+aquaculture_eez_eval <- function(species, min_sst, max_sst, min_depth, max_depth) {
+
+    # 1. IDENTIFY SUITABLE LOCATIONS
+
+    # Set matrix for classify categories - tempC
+    rcl_matrix_tempC <- matrix(c(
+                        min_sst, max_sst, 1
+                        ), ncol = 3, byrow = TRUE)
+
+    # Reclassify tempC layer using tempC-defined suitability matrix 
+    oyster_tempC_zones <- classify(ocean_raster[[1]], rcl = rcl_matrix_tempC, others = 0)
+
+    # Set matrix for classify categories - depthm
+    rcl_matrix_depthm <- matrix(c(
+                        min_depth, max_depth, 1
+                        ), ncol = 3, byrow = TRUE)
+
+    # Reclassify depthm layer using depthm-defined suitability matrix
+    oyster_depthm_zones <- classify(ocean_raster[[2]], rcl = rcl_matrix_depthm, others = 0)
+
+    # Multiply layers to classify by both tempC and depthm
+    # Note: Only 1*1 cells will stay 1
+    habitat_class <- oyster_tempC_zones * oyster_depthm_zones
+
+    # Rename label
+    names(habitat_class) <- "Suitable_Habitat"
+
+    # 2. DETERMINE MOST SUITABLE EEZ
+
+    # Turn eez vector data into raster
+    eez_raster <- rasterize(eez, habitat_class, field = "rgn")
+
+    # Confirm rasterization of eez matches habitat_class raster
+    # Warning - confirm eez_raster and SST raster match before proceeding
+    # Note: compare crs, resolution, and extent
+    print("Checking that rasters match in CRS, resolution, and extent...")
+    if (same.crs(habitat_class,eez_raster)){
+        # CRS match - true
+        print("CRS do match!")
+        if (all(res(habitat_class) == res(eez_raster))){
+            # Resolution match - true
+            print("Resolutions do match!")
+            if (ext(habitat_class) == ext(eez_raster)) {
+                # Extent match - true
+                print("Extents do match!")
+                print("Success - rasters match in all required characteristics.")
+            } else {
+                # Extent match - false
+                stop("Extents do NOT match!")
+            }
+        } else {
+            # Resolution match - false
+            stop("Resolutions do NOT match!")
+        }
+    } else {
+        # CRS match - false
+        stop("CRS do NOT match!")
+    }
+
+    # Grid cell area needs to be determined since crs is EPSG:4326 (units = deg, not km)
+    # Note: m^2 is default unit for cellSize()
+    habclass_cellarea <- cellSize(habitat_class, unit = "km")
+
+    # Multiply each cell in habitat_class by the cellSize areas
+    # Note: Because unsuitable = 0, unsuitable cells area will = 0
+    # Note: Only suitable cells (1) will keep the size value (km^2)
+    habitat_class_area <- habitat_class * habclass_cellarea
+
+    # Rename to add units
+    names(habitat_class_area) <- "Suitable_Habitat_km2"
+
+    # Calculate sum of suitable area in each EEZ using zonal operation
+    # habitat_class_area = raster where every suitable pixel represents size in km^2
+    # eez_raster = raster version of EEZ vector (EEZ regions)
+    eez_priority <- zonal(habitat_class_area, eez_raster, fun = "sum", na.rm = TRUE)
+
+    # Sort eez regions by descending area
+    eez_priority <- eez_priority |> 
+        arrange(desc(Suitable_Habitat_km2))
+
+    # 3. GENERATE FIGURE
+
+    # Set color palette
+    color_palette <- c("#d9d9d9", "#0077b6")
+
+    # Add back EEZ polygon geometries for plotting
+    eez_mapv <- eez |> 
+        left_join(eez_priority, by = "rgn") |> 
+        # Sort by desc. suitable area
+        arrange(desc(Suitable_Habitat_km2))
+
+    # Create EEZ region map colored by amount of suitable area
+    # Add basemap
+    map1 <- tm_basemap(server = "Esri.WorldTopoMap") +
+    # Add EEZ polygons
+    tm_shape(eez_mapv) +
+    tm_polygons(fill = "Suitable_Habitat_km2",
+                fill_alpha = 0.6, # Transparency
+                col = "#36454F", # Border color
+                # Define color palette for 'aquaculture suitability' fill
+                fill.scale = tm_scale_continuous(values = color_palette),
+                # Re-label fill legend and adjust position
+                fill.legend = tm_legend(title = "Suitable Area (km^2)",
+                                        position = tm_pos_out("right","center"))) +
+    # Add region key as text inside each EEZ polygon
+    tm_text(text = "rgn_key",
+            size = 0.8,
+            col = "#36454F") +
+    # Add compass and scalebar
+    tm_compass(position = c("left","bottom")) +
+    tm_scalebar(position = c("left","bottom")) +
+    # Adjust pdf figure sizing - turn off autoscale
+    tm_options(component.autoscale = FALSE) +
+    # Add figure title
+    tm_title(paste("US West Coast EEZs:\nMost Suitable Area for",
+                    toTitleCase(species),"Aquaculture"),
+                size = 1.8,
+                frame = TRUE) +
+    # Adjust legend text, fonts, and margins
+    tm_layout(
+            # Specify legend title size
+            legend.title.size = 1.0,
+            # Specify legend text size
+            legend.text.size = 0.8,
+            # Set font family
+            text.fontfamily = "sans",
+            # Set inner margins to give scalebar room
+            inner.margins = c(0.1,0.1,0.05,0.05)
+            )
+
+    # 4. GENERATE TABLE
+
+    # Make sorted table of prioritzed EEZs for this species
+    priority_table <- eez_mapv |> 
+    select(rgn, rgn_key, Suitable_Habitat_km2) |> 
+    st_drop_geometry()
+
+    # Return the map for this species
+    return(list(map1,priority_table))
+}
+```
+
+# Prepare data
 
 ```{r}
 # LOAD DATA
 
 # Load west coast EEZ vector file
-eez <- sf::st_read(here("data","wc_regions_clean.shp")) #|> 
-        # Correct invalid geometries to avoid error in st_join when using CRS 4326
-        #st_make_valid()
+eez <- sf::st_read(here("data","wc_regions_clean.shp"))
 
 # Load bathymetry raster
 bath <- rast(here("data","depth.tif"))
@@ -93,13 +232,8 @@ if (same.crs(eez,bath) & same.crs(sst_stack, eez)){
 
 
 ```{r}
-# # Confirm same CRS before proceeding
-# cat("Check CRS Match:\n")
-# cat("West Coast EEZ vs bathymetry: ", same.crs(eez, bath), "\n")
-# cat("SST Stack vs West Coast EEZ: ", same.crs(sst_stack, eez), "\n")
-
-# All CRS match, but EPSG code is missing from sst_stack.
-# Assign ESPG:4326 code to sst_stack
+# All CRS match, but EPSG code is missing from sst_stack WKT.
+# Assign ESPG:4326 code to sst_stack WKT to avoid errors
 crs(sst_stack) <- "EPSG:4326"
 ```
 
@@ -117,13 +251,13 @@ cat("New SST Mean raster has:",nlyr(sst_mean),"layer","\n")
 
 ```{r}
 # Check units of SST_mean raster
-minmax(sst_mean)
+cat("Original range of Mean SST (K) raster:",minmax(sst_mean))
 
 # Convert SST_mean K to C (local operation - each cell)
 sst_mean_C <- sst_mean - 273.15
 
 # Confirm units of SST_mean_C raster
-minmax(sst_mean_C)
+cat("Transformed range of Mean SST (degC) raster:",minmax(sst_mean_C))
 ```
 
 ```{r}
@@ -133,14 +267,14 @@ bath_crop <- crop(bath, sst_mean_C)
 ```
 
 ```{r}
-# Resample bath to match sst_mean_C using bilinear approach
+# Resample bath raster to match sst_mean_C resolution using bilinear approach
 bath_resampled <- resample(bath_crop, sst_mean_C, method = "bilinear")
 ```
 
 ```{r}
 # Warning - confirm bathymetry and SST raster match before proceeding
 # Note: compare crs, resolution, and extent
-print("Checking that sst_mean_C and bath_resampled rasters match in CRS, resolution, and extent...")
+print("Checking that rasters match in CRS, resolution, and extent...")
 if (same.crs(bath_resampled,sst_mean_C)){
     # CRS match - true
     print("CRS do match!")
@@ -150,7 +284,7 @@ if (same.crs(bath_resampled,sst_mean_C)){
         if (ext(sst_mean_C) == ext(bath_resampled)) {
             # Extent match - true
             print("Extents do match!")
-            print("Success - sst_mean_C and bath_resampled match in all required raster characteristics.")
+            print("Success - rasters match in all required characteristics.")
         } else {
             # Extent match - false
             stop("Extents do NOT match!")
@@ -173,178 +307,70 @@ cat("New ocean_raster has",nlyr(ocean_raster),"layers.\n")
 cat("Layers are:",names(ocean_raster)[nlyr(ocean_raster)-1],",",names(ocean_raster)[nlyr(ocean_raster)])
 ```
 
-# Find suitable locations
+# Determine Most Suitable US West Coast EEZs for Marine Aquaculture
 
-```{r}
-# Set matrix for classify categories - tempC
-rcl_matrix_tempC <- matrix(c(
-   11,  30,  1
-), ncol = 3, byrow = TRUE)
-
-# Reclassify tempC layer and turn resulting categories into factors 
-oyster_tempC_zones <- classify(ocean_raster[[1]], rcl = rcl_matrix_tempC, others = 0)
-
-# Define level names
-levels(oyster_tempC_zones) <- data.frame(
-  value = 0:1,
-  label = c("Unsuitable", "Suitable")
-)
-
-# Set matrix for classify categories - depthm
-rcl_matrix_depthm <- matrix(c(
-   -70,  0,  1
-), ncol = 3, byrow = TRUE)
-
-# Reclassify depthm layer and turn resulting categories into factors 
-oyster_depthm_zones <- classify(ocean_raster[[2]], rcl = rcl_matrix_depthm, others = 0)
-
-# Define level names
-levels(oyster_depthm_zones) <- data.frame(
-  value = 0:1,
-  label = c("Unsuitable", "Suitable")
-)
-
-# Multiply layers to classify by both tempC and depthm
-# Note: Only 1*1 cells will stay 1
-habitat_class <- oyster_tempC_zones * oyster_depthm_zones
-
-# Rename label
-names(habitat_class) <- "Suitable_Habitat"
-```
-
-# Determine the most suitable EEZ
-
-```{r}
-# Turn eez vector data into raster
-eez_raster <- rasterize(eez, habitat_class, field = "rgn")
-
-# Confirm rasterization of eez matches habitat_class raster
-# Warning - confirm eez_raster and SST raster match before proceeding
-# Note: compare crs, resolution, and extent
-print("Checking that habitat_class and eez_raster rasters match in CRS, resolution, and extent...")
-if (same.crs(habitat_class,eez_raster)){
-    # CRS match - true
-    print("CRS do match!")
-    if (all(res(habitat_class) == res(eez_raster))){
-        # Resolution match - true
-        print("Resolutions do match!")
-        if (ext(habitat_class) == ext(eez_raster)) {
-            # Extent match - true
-            print("Extents do match!")
-            print("Success - habitat_class and eez_raster match in all required raster characteristics.")
-        } else {
-            # Extent match - false
-            stop("Extents do NOT match!")
-        }
-    } else {
-        # Resolution match - false
-        stop("Resolutions do NOT match!")
-    }
-} else {
-    # CRS match - false
-    stop("CRS do NOT match!")
-}
-```
-
-```{r}
-# Grid cell area needs to be determined since crs is EPSG:4326 (units = deg)
-# Note: m^2 is default unit
-habclass_cellarea <- cellSize(habitat_class, unit = "km")
-
-# Multiply each cell in habitat_class by the cellSize areas
-# Note: Because unsuitable = 0, unsuitable cells area will = 0
-# Note: Only suitable cells (1) will keep the size value (m^2)
-habitat_class_area <- habitat_class * habclass_cellarea
-
-# Rename to add units
-names(habitat_class_area) <- "Suitable_Habitat_km2"
-```
-
-```{r}
-# Calculate sum of suitable area in each EEZ using zonal operation
-# habitat_class_area = raster where every suitable pixel represents size in m^2
-# eez_raster = raster version of EEZ vector (EEZ regions)
-eez_priority <- zonal(habitat_class_area, eez_raster, fun = "sum", na.rm = TRUE)
-
-# Sort eez regions by descending area
-eez_priority <- eez_priority |> 
-    arrange(desc(Suitable_Habitat_km2))
-```
+## Species: Oysters
 
 ```{r}
 #| warning: false
-#| fig-width: 10
-#| fig-height: 7
+#| fig-width: 11
+#| fig-height: 9
 
-# GENERATE FIGURE
-
-# Set color palette
-color_palette <- c("#d9d9d9", "#0077b6")
-
-# Add back EEZ polygon geometries for plotting
-eez_mapv <- eez |> 
-    left_join(eez_priority, by = "rgn") |> 
-    # Sort by desc. suitable area
-    arrange(desc(Suitable_Habitat_km2))
-
-
-# Create EEZ region map colored by amount of suitable area
-# Add basemap
-tm_basemap(server = "Esri.WorldTopoMap") +
-# Add EEZ polygons
-tm_shape(eez_mapv) +
-  tm_polygons(fill = "Suitable_Habitat_km2",
-              fill_alpha = 0.6, # Transparency
-              col = "#36454F", # Border color
-              # Define color palette for 'aquaculture suitability' fill
-              fill.scale = tm_scale_continuous(values = color_palette),
-              # Re-label fill legend and adjust position
-              fill.legend = tm_legend(title = "Suitable Area (km^2)",
-                                      position = tm_pos_out("right"))) +
-  # Add region key as text inside each EEZ polygon
-  tm_text(text = "rgn_key",
-          size = 0.8,
-          col = "#36454F") +
-# Add compass and scalebar
-tm_compass(position = c("left","bottom")) +
-tm_scalebar(position = c("left","bottom")) +
-# Adjust pdf figure sizing - turn off autoscale
-tm_options(component.autoscale = FALSE) +
-# Add figure title
-tm_title("EEZ Regions with the Most Suitable Area for Oyster Aquaculture",
-            size = 1.5,
-            frame = TRUE) +
-# Adjust legend text, fonts, and margins
-tm_layout(# Specify legend title size
-          legend.title.size = 1.0,
-          # Specify legend text size
-          legend.text.size = 0.8,
-          # Set font family
-          text.fontfamily = "sans",
-          # Set inner margins to give scalebar room
-          inner.margins = c(0.1,0.1,0.05,0.05)
-          )
-
+# Use aquaculture_eez_eval() to create map and table
+oyster_results <- aquaculture_eez_eval("Oysters", 11, 30, -70, 0)
+# Display map
+oyster_results[[1]]
 ```
-Figure 1: Map of the US West Coast Exclusive Economic Zones (EEZ), colored by amount of suitable area (km^2) for oyster marine aquaculture. Suitable area for oyster aquaculture is defined by areas meeting both the temperature requirement of 11-30 degree C, and the depth requirement of 0 to 70 m.
+Figure 1: Map of the US West Coast Exclusive Economic Zones (EEZ), colored by amount of suitable area (km^2) for oysters marine aquaculture. Suitable area for oysters aquaculture is defined by areas meeting both the temperature requirement of 11 to 30 degrees C, and the depth requirement of 0 to 70 m.
 
 ```{r}
-#| tbl-cap: "Total suitable area (km^2) for oyster marine aquaculture in each US West Coast Exclusive Economic Zone (EEZ). Suitable area for oyster aquaculture is defined by areas meeting both the temperature requirement of 11-30 degree C, and the depth requirement of 0 to 70 m."
+#| tbl-cap: "Total suitable area (km^2) for oysters marine aquaculture in each US West Coast Exclusive Economic Zone (EEZ). Suitable area for oysters marine aquaculture is defined by areas meeting both the temperature requirement of 11 to 30 degrees C, and the depth requirement of 0 to 70 m."
 
-# Make table using kable
-eez_mapv |> 
-    select(rgn, rgn_key, Suitable_Habitat_km2) |> 
-    st_drop_geometry() |> 
-    knitr::kable(col.names = c("EEZ Region", "Region Key", "Total Suitable Habitat (km^2)"))
+    # Make table for this species using kable
+    knitr::kable(oyster_results[[2]],
+        col.names = c("EEZ Region", "Region Key", "Total Suitable Habitat (km^2)"))
 ```
+
+## Species: Iceland scallop
+
+```{r}
+#| warning: false
+#| fig-width: 11
+#| fig-height: 9
+
+# Use aquaculture_eez_eval() to create map and table
+# Note: Iceland scallop temp range was ?-15 deg C, interpreted here as 0-15 degC
+scallop_results <- aquaculture_eez_eval("Iceland Scallop", 0, 15, -250, 4)
+# Display map
+scallop_results[[1]]
+```
+Figure 2: Map of the US West Coast Exclusive Economic Zones (EEZ), colored by amount of suitable area (km^2) for Iceland scallop (Chlamys islandica) marine aquaculture. Suitable area for Iceland scallop marine aquaculture is defined by areas meeting both the temperature requirement of 0 to 15 degree C, and the depth requirement of 4 to 250 m.
+
+```{r}
+#| tbl-cap: "Total suitable area (km^2) for Iceland scallop marine aquaculture in each US West Coast Exclusive Economic Zone (EEZ). Suitable area for Iceland scallop marine aquaculture is defined by areas meeting both the temperature requirement of 0 to 15 degrees C, and the depth requirement of 4 to 250 m."
+
+    # Make table for this species using kable
+    knitr::kable(scallop_results[[2]],
+        col.names = c("EEZ Region", "Region Key", "Total Suitable Habitat (km^2)"))
+```
+
+# Reflection
+
+For this assignment, you are tasked with determining which Exclusive Economic Zones (EEZ) on the West Coast of the US are best suited to developing marine aquaculture for several species of oysters and a species of your choice. Suitable locations will be determined based on range of suitable sea surface temperature (SST) and depth values for the species.
+
+In this analysis, the US West Coast Exclusive Economic Zones (EEZs) were assessed to determine the most suitable EEZs for expanding marine aquaculture. "Suitability" of an EEZ for marine aquaculture of a species was determined by calculating the total amount of area (km^2) in that EEZ that met the temperature and depth requirements for that species. Two potential marine aquaculture species were explored: oysters, with a temperature range of 11 to 30 degC and a depth range of 0 to 70 m, and Iceland scallops, with a temperature range of "?" to 15 degrees and a depth range of 4 to 250 m (Palomares, et al.). The "?" lower end of the scallop temperature range was assumed to be 0 for the purposes of this analysis.
+
+
 
 # Data
 
 Flanders Marine Institute (2026): MarineRegions.org. https://www.marineregions.org/eez.php
 
-GEBCO Compilation Group. (2022). GEBCO_2022 Grid [Data set]. British Oceanographic Data Centre, National Oceanography Centre, NERC, UK. https://doi.org/10.5285/e0f0bb80-ab44-2739-e053-6c86abc0289c
+GEBCO Compilation Group. (2022). GEBCO_2022 Grid [Data set]. British Oceanographic Data Centre, National Oceanography Centre, NERC, UK. https://doi.org/10.5285/e0f0bb80-ab44-2739-e053-6c86abc0289c.
 
-NOAA Coral Reef Watch. (2018). Daily global 5km satellite sea surface temperature anomaly (Version 3.1). U.S. Department of Commerce, National Oceanic and Atmospheric Administration. https://coralreefwatch.noaa.gov/product/5km/index_5km_ssta.php
+NOAA Coral Reef Watch. (2018). Daily global 5km satellite sea surface temperature anomaly (Version 3.1). U.S. Department of Commerce, National Oceanic and Atmospheric Administration. https://coralreefwatch.noaa.gov/product/5km/index_5km_ssta.php.
+
+Palomares, M. L. D., & Pauly, D. (Eds.). (n.d.). Country species summary: Chlamys islandica in United States. SeaLifeBase. Retrieved November 5, 2026, from https://www.sealifebase.ca/country/CountrySpeciesSummary.php?c_code=840&id=47720.
 
 # References
 
