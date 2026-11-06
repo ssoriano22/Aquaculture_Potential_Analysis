@@ -328,6 +328,7 @@ Figure 1: Map of the US West Coast Exclusive Economic Zones (EEZ), colored by am
 
     # Make table for this species using kable
     knitr::kable(oyster_results[[2]],
+        digits = 2,
         col.names = c("EEZ Region", "Region Key", "Total Suitable Habitat (km^2)"))
 ```
 
@@ -344,23 +345,22 @@ scallop_results <- aquaculture_eez_eval("Iceland Scallop", 0, 15, -250, 4)
 # Display map
 scallop_results[[1]]
 ```
-Figure 2: Map of the US West Coast Exclusive Economic Zones (EEZ), colored by amount of suitable area (km^2) for Iceland scallop (Chlamys islandica) marine aquaculture. Suitable area for Iceland scallop marine aquaculture is defined by areas meeting both the temperature requirement of 0 to 15 degree C, and the depth requirement of 4 to 250 m.
+Figure 2: Map of the US West Coast Exclusive Economic Zones (EEZ), colored by amount of suitable area (km^2) for Iceland scallop (_Chlamys islandica_) marine aquaculture. Suitable area for Iceland scallop marine aquaculture is defined by areas meeting both the temperature requirement of 0 to 15 degree C, and the depth requirement of 4 to 250 m.
 
 ```{r}
 #| tbl-cap: "Total suitable area (km^2) for Iceland scallop marine aquaculture in each US West Coast Exclusive Economic Zone (EEZ). Suitable area for Iceland scallop marine aquaculture is defined by areas meeting both the temperature requirement of 0 to 15 degrees C, and the depth requirement of 4 to 250 m."
 
     # Make table for this species using kable
     knitr::kable(scallop_results[[2]],
+        digits = 2,
         col.names = c("EEZ Region", "Region Key", "Total Suitable Habitat (km^2)"))
 ```
 
 # Reflection
 
-For this assignment, you are tasked with determining which Exclusive Economic Zones (EEZ) on the West Coast of the US are best suited to developing marine aquaculture for several species of oysters and a species of your choice. Suitable locations will be determined based on range of suitable sea surface temperature (SST) and depth values for the species.
-
 In this analysis, the US West Coast Exclusive Economic Zones (EEZs) were assessed to determine the most suitable EEZs for expanding marine aquaculture. "Suitability" of an EEZ for marine aquaculture of a species was determined by calculating the total amount of area (km^2) in that EEZ that met the temperature and depth requirements for that species. Two potential marine aquaculture species were explored: oysters, with a temperature range of 11 to 30 degC and a depth range of 0 to 70 m, and Iceland scallops, with a temperature range of "?" to 15 degrees and a depth range of 4 to 250 m (Palomares, et al.). The "?" lower end of the scallop temperature range was assumed to be 0 for the purposes of this analysis.
 
-
+The Central California (CA-C) EEZ contained the most suitable area for oysters marine aquaculture with 4373.56 km^2, while Northern California (CA-N) contained the least with 323.91 km^2 (Figure 1, Table 1). Oregon (OR) only had slightly more suitable area with 1395.73 km^2, while Southern California (CA-S) and Washington (WA) had 3329.90 and 3091.52 km^2, respectively. For Iceland scallops marine aquaculture, the OR and WA EEZs contained the most suitable area at 17933.15 and 17913.04 km^2, respectively (Figure 2, Table 2). CA-C had the next most suitable area at 10330.27 km^2, followed by CA-N at 8615.52 km^2 and CA-S at 4244.17 km^2. Overall, there is more potential for Iceland scallop marine aquaculture than oysters marine aquaculture in US West Coast EEZs. If only one EEZ were chosen for both species based on this analysis, the CA-C EEZ potantially has the most suitable marine aquaculture area for both species.
 
 # Data
 
